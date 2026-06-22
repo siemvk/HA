@@ -1,5 +1,6 @@
 import { randomInt } from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
+import http from 'http';
 import {
     playerStateUpdate,
     type pin,
@@ -11,7 +12,13 @@ import {
 } from "../packet.ts"
 
 const PORT = 8081;
-const wss = new WebSocketServer({ port: PORT });
+const server = http.createServer((req, res) => {
+    // Redirect all standard HTTP traffic
+    res.writeHead(301, { Location: 'https://client.siemvk.nl' });
+    res.end();
+});
+
+const wss = new WebSocketServer({ server });
 
 type Game = {
     name: string;
@@ -43,8 +50,6 @@ wss.on('connection', (self: WebSocket) => {
     console.log(`C - ${id} - 200`);
 
     let connectedTo: Game | undefined;
-
-    self.send('Welcome to the TypeScript WebSocket server!');
 
     self.on('message', (data: Buffer, isBinary: boolean) => {
         const msg: toServer = JSON.parse(data.toString());
@@ -153,4 +158,8 @@ wss.on('connection', (self: WebSocket) => {
         console.error(`WebSocket error: ${error.message}`);
         self.close(400);
     });
+});
+
+server.listen(PORT, () => {
+    console.log(`Listening on port ${PORT} for both HTTP and WS`);
 });

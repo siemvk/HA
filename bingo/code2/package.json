@@ -12,6 +12,7 @@
     "prod": "bun run server/index.ts"
   },
   "dependencies": {
+    "@types/qrcode": "^1.5.6",
     "ws": "^8.21.0"
   }
 }

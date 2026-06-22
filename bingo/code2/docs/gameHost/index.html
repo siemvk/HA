@@ -6,13 +6,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BINGO</title>
 
-    <!-- Google Fonts: Roboto and Material Icons -->
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
-    <!-- Materialize Web CSS (v2.2.2 Community Fork) -->
     <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/npm/@materializecss/materialize@2.2.2/dist/css/materialize.min.css">
+
+    <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
 
     <style>
         body {
@@ -44,6 +44,7 @@
         </div>
         <div class="modal-content">
             <p id="pin-pop">De code is: </p>
+            <canvas id="my-canvas-popup"></canvas>
         </div>
         <div class="modal-footer">
             <button tabindex="0" class="waves-effect btn-flat" popovertarget="modal1">Sluiten</button>
@@ -80,15 +81,19 @@
                 </div>
             </h5>
         </div>
-
         <button class="btn filled icon-right rounded waves-effect waves-light" id="start-knop">
             Start! <i class="material-icons">rocket_launch</i>
         </button>
+        <br>
+        <br>
+        <canvas id="my-canvas">
+
+        </canvas>
     </div>
     <div class="card" id="main-card" hidden>
 
         <h5>BINGO</h5>
-        <h2>GETAL</h2>
+        <h2 id="bingoGetal">GETAL</h2>
 
     </div>
     <div class="fixed-action-btn">
@@ -104,13 +109,10 @@
         </ul>
     </div>
 
-    <!-- Materialize Web JS -->
     <script src="https://cdn.jsdelivr.net/npm/@materializecss/materialize@2.2.2/dist/js/materialize.min.js"></script>
 
-    <!-- Your external script -->
     <script type="module" src="index.js" defer></script>
 
-    <!-- Auto-initialize Materialize components -->
     <script>
         document.addEventListener('DOMContentLoaded', function () {
             M.AutoInit();

@@ -4,7 +4,8 @@ export type toServer = {
     public: boolean
 } | {
     type: "connect",
-    pin: pin
+    pin: pin,
+    naam: string
 } | {
     type: "kick",
     player: playerId,

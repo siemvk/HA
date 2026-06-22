@@ -26,11 +26,15 @@
             background-color: #252729;
             padding: 20px;
             border-radius: 10px;
-            margin: auto
+            margin: auto;
         }
 
         .card div {
             margin-bottom: 10px;
+        }
+
+        .card button {
+            margin-top: 10px;
         }
     </style>
 </head>
@@ -40,8 +44,13 @@
         <h4>Siemvk game client!</h4>
         <div class="input-field outlined">
             <i class="material-icons prefix">vpn_key</i>
-            <input id="pinInput" type="text" placeholder=" " maxlength="4">
+            <input id="pinInput" type="text" placeholder=" " maxlength="4" minlength="4">
             <label for="pinInput">Pincode</label>
+        </div>
+        <div class="input-field outlined">
+            <i class="material-icons prefix">account_circle</i>
+            <input id="nameInput" type="text" placeholder=" " maxlength="15" minlength="4">
+            <label for="nameInput">Naam</label>
         </div>
 
         <button class="btn filled icon-right rounded waves-effect waves-light" id="sendBtn">

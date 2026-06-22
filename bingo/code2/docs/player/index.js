@@ -1,19 +1,26 @@
 // player/index.ts
-var URL = "ws://localhost:8081";
-if (window.origin.includes("siemvk.nl")) {
-  URL = "ws://ws.siemvk.nl/";
+var URL = "wss://ws.siemvk.nl";
+if (localStorage.getItem("testing") !== null) {
+  URL = "ws://localhost:8081";
+}
+document.getElementById("pinInput").value = new URLSearchParams(window.location.search).get("p");
+if (new URLSearchParams(window.location.search).has("p")) {
+  document.getElementById("pinInput").parentElement.hidden = true;
 }
 var ws = new WebSocket(URL);
 function wsSend(ws2, data) {
   ws2.send(JSON.stringify(data));
 }
+ws.addEventListener("close", () => location.reload());
 ws.addEventListener("open", (ev) => {
   genReserved();
   document.getElementById("sendBtn").onclick = () => {
     const input = document.getElementById("pinInput");
+    const input2 = document.getElementById("nameInput");
     wsSend(ws, {
       type: "connect",
-      pin: input.value
+      pin: input.value,
+      naam: input2.value.replaceAll("-", "_")
     });
   };
 });
@@ -77,6 +84,7 @@ function renderElement(el) {
       if (existingBtn) {
         existingBtn.innerText = el.content;
       } else {
+        const br = document.createElement("br");
         const newElement = document.createElement("button");
         newElement.classList.add("btn", "filled", "icon-right", "rounded", "waves-effect", "waves-light");
         newElement.innerHTML = el.content;
@@ -97,6 +105,7 @@ function renderElement(el) {
             });
           }
         };
+        gameCard.appendChild(br);
         gameCard.appendChild(newElement);
       }
       break;
@@ -250,5 +259,5 @@ export {
   init
 };
 
-//# debugId=AE69AEE044E78C7064756E2164756E21
+//# debugId=E142DE9D140DA8B264756E2164756E21
 //# sourceMappingURL=index.js.map

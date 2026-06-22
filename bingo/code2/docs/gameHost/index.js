@@ -1,8 +1,8 @@
 // gameHost/index.ts
 var code = document.getElementById("code");
-var URL = "ws://localhost:8081";
-if (window.origin.includes("siemvk.nl")) {
-  URL = "ws://ws.siemvk.nl/";
+var URL = "wss://ws.siemvk.nl";
+if (localStorage.getItem("testing") !== null) {
+  URL = "ws://localhost:8081";
 }
 var ws = new WebSocket(URL);
 var adminWs = new WebSocket(URL);
@@ -53,7 +53,7 @@ ws.addEventListener("message", (ev) => {
       console.log("Connect: ", msg.player);
       sendUI(msg.player);
     } else {
-      players.filter((v) => {
+      players = players.filter((v) => {
         if (v == msg.player) {
           return false;
         }
@@ -61,6 +61,7 @@ ws.addEventListener("message", (ev) => {
       });
       console.log("Disconnect: ", msg.player);
     }
+    sendAdminState();
   }
 });
 function sendUI(player) {
@@ -128,9 +129,13 @@ adminWs.addEventListener("message", (ev) => {
       if (newFase?.type == "field") {
         setFase(newFase.value);
       }
-    }
-    if (msg.elementInteractedWith.id == "toggelCodeView") {
+    } else if (msg.elementInteractedWith.id == "toggelCodeView") {
       document.getElementById("modal1")?.togglePopover();
+    } else if (msg.elementInteractedWith.id.startsWith("kick-")) {
+      wsSend(ws, {
+        type: "kick",
+        player: msg.elementInteractedWith.id.split("-")[1]
+      });
     }
   }
 });
@@ -139,11 +144,6 @@ function sendAdminState() {
     return;
   }
   let elList = [
-    {
-      type: "txt",
-      content: "fase: " + fase,
-      id: "state"
-    },
     {
       type: "field",
       fieldType: "radio",
@@ -154,7 +154,8 @@ function sendAdminState() {
         "bezig",
         "bingo"
       ],
-      content: "fase"
+      content: "fase",
+      value: fase
     },
     {
       type: "button",
@@ -164,11 +165,6 @@ function sendAdminState() {
       interaction: "sendToHost"
     },
     {
-      type: "html-render",
-      id: "spacer",
-      content: "<br>"
-    },
-    {
       type: "button",
       id: "toggelCodeView",
       content: "Toggel code",
@@ -176,6 +172,24 @@ function sendAdminState() {
       interaction: "sendToHost"
     }
   ];
+  if (fase == "bezig") {
+    elList.push({
+      type: "button",
+      id: "nextNum",
+      content: "Volgend numer",
+      icon: "navigate_next",
+      interaction: "sendToHost"
+    });
+  }
+  players.forEach((p) => {
+    elList.push({
+      type: "button",
+      id: "kick-" + p,
+      content: "Kick " + p,
+      icon: "block",
+      interaction: "sendToHost"
+    });
+  });
   wsSend(adminWs, {
     type: "UI-set",
     player: admin,
@@ -186,7 +200,32 @@ function updC() {
   code.innerText = "PIN: " + pin;
   document.getElementById("pin-pop").innerText = "De code is: " + pin;
   document.getElementById("adminPin").innerText = "De code is: " + Apin;
+  sendAdminState();
+  renderQR("my-canvas", pin);
+  renderQR("my-canvas-popup", pin);
+}
+function renderQR(el, pin2) {
+  const canvas = document.getElementById(el);
+  if (!canvas) {
+    console.error("Canvas element not found!");
+    return;
+  }
+  const textToEncode = `https://client.siemvk.nl/player/?p=${pin2}`;
+  QRCode.toCanvas(canvas, textToEncode, {
+    width: 200,
+    margin: 2,
+    color: {
+      dark: "#000000",
+      light: "#ffffff"
+    }
+  }, (error) => {
+    if (error) {
+      console.error("Failed to generate QR code:", error);
+    } else {
+      console.log("QR code generated successfully!");
+    }
+  });
 }
 
-//# debugId=259454AE1270A63164756E2164756E21
+//# debugId=9DC5B0FC5B7AEFB164756E2164756E21
 //# sourceMappingURL=index.js.map

@@ -46,7 +46,7 @@ function wsSend(ws: WebSocket, data: toClient) {
 }
 
 wss.on('connection', (self: WebSocket) => {
-    const id = randomInt(1000, 10000).toString();
+    let id = randomInt(1000, 10000).toString();
     console.log(`C - ${id} - 200`);
 
     let connectedTo: Game | undefined;
@@ -71,7 +71,7 @@ wss.on('connection', (self: WebSocket) => {
 
         } else if (msg.type === "connect") {
             const game = games[msg.pin];
-
+            id = msg.naam
             if (game) {
                 connectedTo = game;
                 connectedTo.clients.push({ ws: self, id: id });

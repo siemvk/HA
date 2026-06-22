@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WS client</title>
+
+    <!-- Google Fonts: Roboto and Material Icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
+    <!-- Materialize Web CSS (v2.2.2 Community Fork) -->
+    <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@materializecss/materialize@2.2.2/dist/css/materialize.min.css">
+
+    <style>
+        /* Optional: Add some breathing room */
+        body {
+            padding: 24px;
+        }
+
+        .card {
+            max-width: 400px;
+            text-align: center;
+            background-color: #252729;
+            padding: 20px;
+            border-radius: 10px;
+            margin: auto
+        }
+
+        .card div {
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="code-card" class="card">
+        <h4>Siemvk game client!</h4>
+        <div class="input-field outlined">
+            <i class="material-icons prefix">vpn_key</i>
+            <input id="pinInput" type="text" placeholder=" " maxlength="4">
+            <label for="pinInput">Pincode</label>
+        </div>
+
+        <button class="btn filled icon-right rounded waves-effect waves-light" id="sendBtn">
+            Start<i class="material-icons right" style="margin-left: 8px;">play_arrow</i>
+        </button>
+    </div>
+    <div id="game-card" class="card" hidden>
+        <div class="preloader-wrapper small active" id="hide_on_load">
+            <div class="spinner-layer spinner-blue-only">
+                <div class="circle-clipper left">
+                    <div class="circle"></div>
+                </div>
+                <div class="gap-patch">
+                    <div class="circle"></div>
+                </div>
+                <div class="circle-clipper right">
+                    <div class="circle"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Materialize Web JS -->
+    <script src="https://cdn.jsdelivr.net/npm/@materializecss/materialize@2.2.2/dist/js/materialize.min.js"></script>
+
+    <!-- Your external script -->
+    <script type="module" src="index.js" defer></script>
+
+    <!-- Auto-initialize Materialize components -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            M.AutoInit();
+        });
+    </script>
+</body>
+
+</html>

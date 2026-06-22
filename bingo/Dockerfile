@@ -12,7 +12,7 @@ ENV PATH="/root/.bun/bin:${PATH}"
 WORKDIR /app
 
 # Copy the contents of your local 'code' folder into the /app directory
-COPY code/ ./
+COPY code2/ ./
 
 # Install the dependencies from the package.json we just copied
 RUN bun install

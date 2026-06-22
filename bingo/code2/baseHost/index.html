@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BINGO</title>
+
+    <!-- Google Fonts: Roboto and Material Icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
+    <!-- Materialize Web CSS (v2.2.2 Community Fork) -->
+    <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@materializecss/materialize@2.2.2/dist/css/materialize.min.css">
+
+    <style>
+        body {
+            padding: 24px;
+        }
+
+        .card {
+            max-width: 400px;
+            text-align: center;
+            background-color: #252729;
+            padding: 20px;
+            border-radius: 10px;
+            margin: auto
+        }
+
+        .card div {
+            margin-bottom: 10px;
+        }
+    </style>
+    <link rel="shortcut icon"
+        href="https://www.playtopia.nl/services/media/images/psyruuryxrnyaoxrne/game-logo-large/9122/logo5.png"
+        type="image/x-icon">
+</head>
+
+<body>
+    <div id="modal1" class="modal" popover>
+        <div class="modal-header">
+            <h4>Pincode</h4>
+        </div>
+        <div class="modal-content">
+            <p id="pin-pop">De code is: </p>
+        </div>
+        <div class="modal-footer">
+            <button tabindex="0" class="waves-effect btn-flat" popovertarget="modal1">Sluiten</button>
+        </div>
+    </div>
+    <div id="modal2" class="modal" popover>
+        <div class="modal-header">
+            <h4>Admin pair code</h4>
+        </div>
+        <div class="modal-content">
+            <p id="adminPin">De code is: </p>
+        </div>
+        <div class="modal-footer">
+            <button tabindex="0" class="waves-effect btn-flat" popovertarget="modal2">Sluiten</button>
+        </div>
+    </div>
+    <div class="card" id="code-card">
+
+        <h4>BINGO!</h4>
+        <div>
+            <h5 id="code">PIN: <br>
+                <div class="preloader-wrapper small active" id="hide_on_load">
+                    <div class="spinner-layer spinner-blue-only">
+                        <div class="circle-clipper left">
+                            <div class="circle"></div>
+                        </div>
+                        <div class="gap-patch">
+                            <div class="circle"></div>
+                        </div>
+                        <div class="circle-clipper right">
+                            <div class="circle"></div>
+                        </div>
+                    </div>
+                </div>
+            </h5>
+        </div>
+
+        <button class="btn filled icon-right rounded waves-effect waves-light" id="start-knop">
+            Start! <i class="material-icons">rocket_launch</i>
+        </button>
+    </div>
+    <div class="card" id="main-card" hidden>
+
+        <h5>BINGO</h5>
+        <h2>GETAL</h2>
+
+    </div>
+    <div class="fixed-action-btn">
+        <a class="btn-floating btn-large blue">
+            <i class="large material-icons">dehaze</i>
+        </a>
+        <ul>
+            <li><button class="btn-floating blue" popovertarget="modal1"><i class="material-icons">pin</i></button>
+            </li>
+            <li><button class="btn-floating blue" popovertarget="modal2"><i
+                        class="material-icons">admin_panel_settings</i></button></li>
+
+        </ul>
+    </div>
+
+    <!-- Materialize Web JS -->
+    <script src="https://cdn.jsdelivr.net/npm/@materializecss/materialize@2.2.2/dist/js/materialize.min.js"></script>
+
+    <!-- Your external script -->
+    <script type="module" src="index.js" defer></script>
+
+    <!-- Auto-initialize Materialize components -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            M.AutoInit();
+        });
+        document.addEventListener('DOMContentLoaded', function () {
+            const elems = document.querySelectorAll('.fixed-action-btn');
+            const instances = M.FloatingActionButton.init(elems, {
+                direction: 'left',
+                hoverEnabled: false
+            });
+        });
+    </script>
+</body>
+
+</html>

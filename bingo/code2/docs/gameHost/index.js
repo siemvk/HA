@@ -1,11 +1,19 @@
 // gameHost/index.ts
 var code = document.getElementById("code");
-var ws = new WebSocket("ws://localhost:8081");
-var adminWs = new WebSocket("ws://localhost:8081");
+var URL = "ws://localhost:8081";
+if (window.origin.includes("siemvk.nl")) {
+  URL = "ws://ws.siemvk.nl/";
+}
+var ws = new WebSocket(URL);
+var adminWs = new WebSocket(URL);
 var pin = "None";
 var Apin = "None";
 var fase = "voorbereiden";
 function setFase(newFase = "voorbereiden") {
+  if (newFase == "bezig") {
+    document.getElementById("code-card").hidden = true;
+    document.getElementById("main-card").hidden = false;
+  }
   fase = newFase;
   players.forEach((player) => {
     sendUI(player);
@@ -30,8 +38,6 @@ adminWs.addEventListener("open", (ev) => {
   });
 });
 function init() {
-  document.getElementById("code-card").hidden = true;
-  document.getElementById("main-card").hidden = false;
   setFase("bezig");
 }
 var players = [];
@@ -85,8 +91,9 @@ function sendUI(player) {
           {
             type: "button",
             content: "BINGO!!! ",
-            value: "celebration",
-            id: "knop"
+            icon: "celebration",
+            id: "knop",
+            interaction: "sendToHost"
           }
         ]
       });
@@ -95,18 +102,91 @@ function sendUI(player) {
       break;
   }
 }
+var admin = undefined;
 adminWs.addEventListener("message", (ev) => {
   const msg = JSON.parse(ev.data);
   if (msg.type == "pin") {
     Apin = msg.pin;
     updC();
   }
+  if (msg.type == "playerUpdate" && msg.update == 1 /* connect */) {
+    if (admin != null) {
+      wsSend(adminWs, {
+        type: "kick",
+        player: msg.player
+      });
+    } else {
+      admin = msg.player;
+      sendAdminState();
+    }
+  } else if (msg.type == "playerUpdate" && msg.update == 0 /* disconnect */) {
+    admin = undefined;
+  }
+  if (msg.type == "UI-msg") {
+    if (msg.elementInteractedWith.id == "setFase") {
+      const newFase = msg.elementData.filter((el) => el.id == "faseSelector")[0];
+      if (newFase?.type == "field") {
+        setFase(newFase.value);
+      }
+    }
+    if (msg.elementInteractedWith.id == "toggelCodeView") {
+      document.getElementById("modal1")?.togglePopover();
+    }
+  }
 });
+function sendAdminState() {
+  if (admin == undefined) {
+    return;
+  }
+  let elList = [
+    {
+      type: "txt",
+      content: "fase: " + fase,
+      id: "state"
+    },
+    {
+      type: "field",
+      fieldType: "radio",
+      id: "faseSelector",
+      icon: "dns",
+      options: [
+        "voorbereiden",
+        "bezig",
+        "bingo"
+      ],
+      content: "fase"
+    },
+    {
+      type: "button",
+      id: "setFase",
+      content: "set fase",
+      icon: "save",
+      interaction: "sendToHost"
+    },
+    {
+      type: "html-render",
+      id: "spacer",
+      content: "<br>"
+    },
+    {
+      type: "button",
+      id: "toggelCodeView",
+      content: "Toggel code",
+      icon: "dns",
+      interaction: "sendToHost"
+    }
+  ];
+  wsSend(adminWs, {
+    type: "UI-set",
+    player: admin,
+    elements: elList
+  });
+}
 function updC() {
   code.innerText = "PIN: " + pin;
   document.getElementById("pin-pop").innerText = "De code is: " + pin;
   document.getElementById("adminPin").innerText = "De code is: " + Apin;
 }
 
-//# debugId=D2093C171F1C7AF164756E2164756E21
+//# debugId=259454AE1270A63164756E2164756E21
 //# sourceMappingURL=index.js.map

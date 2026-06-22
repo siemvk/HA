@@ -20,7 +20,8 @@ export type toServer = {
     player: playerId
 } | {
     type: "UI-msg",
-    elementInteractedWith: element
+    elementInteractedWith: element,
+    elementData: element[]
 }
 
 export type toClient = {
@@ -42,15 +43,39 @@ export type toClient = {
 } | {
     type: "UI-msg",
     elementInteractedWith: element
-    player: playerId
+    player: playerId,
+    elementData: element[]
 } | errors
 
 
 export type element = {
-    type: "txt" | "button" | "field" | "html-render",
+    type: "txt" | "html-render",
     id: string,
     content: string,
-    value?: string
+} | {
+    type: "button",
+    id: string,
+    content: string,
+    icon: string,
+    interaction: "sendToHost" | "local"
+    customStyle?: string[]
+} | {
+    type: "field",
+    id: string,
+    content: string, // label
+    value?: string,
+    customStyle?: string[],
+    fieldType: "txt" | "checkbox",
+    icon: string
+} | {
+    type: "field",
+    id: string,
+    content: string, // label
+    value?: string,
+    customStyle?: string[],
+    fieldType: "radio",
+    options: string[],
+    icon: string
 }
 
 export type errors = {

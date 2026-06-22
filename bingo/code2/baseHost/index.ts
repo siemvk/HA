@@ -17,10 +17,6 @@ let Apin = "None"
 let fase: "voorbereiden" | "bezig" | "bingo" = "voorbereiden"
 
 function setFase(newFase: "voorbereiden" | "bezig" | "bingo" = "voorbereiden") {
-    if (newFase == "bezig") {
-        document.getElementById("code-card")!.hidden = true
-        document.getElementById("main-card")!.hidden = false
-    }
     fase = newFase;
     players.forEach((player) => {
         sendUI(player)
@@ -50,6 +46,8 @@ adminWs.addEventListener("open", (ev) => {
 })
 
 function init() {
+    document.getElementById("code-card")!.hidden = true
+    document.getElementById("main-card")!.hidden = false
     setFase("bezig")
 }
 
@@ -148,9 +146,6 @@ adminWs.addEventListener("message", (ev) => {
                 setFase(newFase.value as "voorbereiden" | "bezig" | "bingo")
             }
         }
-        if (msg.elementInteractedWith.id == "toggelCodeView") {
-            document.getElementById("modal1")?.togglePopover();
-        }
     }
 })
 
@@ -181,18 +176,6 @@ function sendAdminState() {
             id: "setFase",
             content: "set fase",
             icon: "save",
-            interaction: "sendToHost"
-        },
-        {
-            type: "html-render",
-            id: "spacer",
-            content: "<br>"
-        },
-        {
-            type: "button",
-            id: "toggelCodeView",
-            content: "Toggel code",
-            icon: "dns",
             interaction: "sendToHost"
         }
     ]

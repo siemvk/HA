@@ -127,7 +127,8 @@ wss.on('connection', (self: WebSocket) => {
                 wsSend(connectedTo.host, {
                     type: "UI-msg",
                     elementInteractedWith: msg.elementInteractedWith,
-                    player: id // Attach the sender's ID
+                    player: id, // Attach the sender's ID
+                    elementData: msg.elementData
                 });
             }
         }

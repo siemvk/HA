@@ -1,6 +1,6 @@
 name: "Bingo app"
 description: "Een bingo app met WebSockets"
-version: "1.0.0"
+version: "1.0.1"
 slug: "bingo_siemvk"
 init: false
 arch:

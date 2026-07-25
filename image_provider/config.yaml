@@ -14,7 +14,7 @@ panel_admin: true
 ports:
   3000/tcp: 3000
 ports_description:
-  3000/TCP: HTTP API endpoint for the current Unsplash image URL
+  3000/tcp: HTTP API endpoint for the current Unsplash image URL
 options:
   unsplash_collection: ""
   unsplash_query: "nature"

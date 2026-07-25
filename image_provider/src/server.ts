@@ -18,11 +18,7 @@ type CachedImage = {
 const desktopImageWidth = 1920;
 const desktopImageHeight = 1080;
 const imageCacheControl = "public, max-age=86400, stale-while-revalidate=604800";
-const corsHeaders: HeadersInit = {
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET, OPTIONS",
-    "access-control-allow-headers": "*",
-};
+const corsHeaders: HeadersInit = {};
 
 const port = 3000;
 const statePath = "/data/current-image.json";

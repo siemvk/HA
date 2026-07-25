@@ -18,6 +18,11 @@ type CachedImage = {
 const desktopImageWidth = 1920;
 const desktopImageHeight = 1080;
 const imageCacheControl = "public, max-age=86400, stale-while-revalidate=604800";
+const corsHeaders: HeadersInit = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-allow-headers": "*",
+};
 
 const port = 3000;
 const statePath = "/data/current-image.json";
@@ -127,6 +132,7 @@ function cacheHeaders(): HeadersInit {
     return {
         "cache-control": imageCacheControl,
         vary: "accept",
+        ...corsHeaders,
     };
 }
 
@@ -183,8 +189,15 @@ const server = Bun.serve({
     fetch: async (request) => {
         const url = new URL(request.url);
 
+        if (request.method === "OPTIONS") {
+            return new Response(null, {
+                status: 204,
+                headers: corsHeaders,
+            });
+        }
+
         if (url.pathname === "/health") {
-            return Response.json({ ok: true });
+            return Response.json({ ok: true }, { headers: corsHeaders });
         }
 
         if (url.pathname === "/image") {
@@ -193,7 +206,9 @@ const server = Bun.serve({
                 return Response.json({ error: "Image not loaded yet" }, { status: 503 });
             }
 
-            return Response.json(image, { headers: cacheHeaders() });
+            return Response.json(image, {
+                headers: cacheHeaders(),
+            });
         }
 
         if (url.pathname === "/image-url") {

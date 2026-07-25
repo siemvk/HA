@@ -1,0 +1,29 @@
+name: oma Image Provider
+version: "0.1.0"
+slug: oma_image_provider
+description: Niet verwijderen
+url: https://github.com/siemvk/HA
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: auto
+init: false
+ingress: false
+panel_admin: true
+ports:
+  3000/tcp: 3000
+ports_description:
+  3000/TCP: HTTP API endpoint for the current Unsplash image URL
+options:
+  unsplash_collection: ""
+  unsplash_query: "nature"
+  refresh_hour_utc: 0
+  refresh_minute_utc: 0
+  access_key: ""
+schema:
+  unsplash_collection: str?
+  unsplash_query: str
+  refresh_hour_utc: int(0,23)
+  refresh_minute_utc: int(0,59)
+  access_key: password

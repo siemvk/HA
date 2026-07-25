@@ -1,0 +1,13 @@
+{
+    "name": "oma-image-provider",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "devDependencies": {
+        "bun-types": "latest"
+    },
+    "scripts": {
+        "dev": "bun run src/server.ts",
+        "start": "bun run src/server.ts"
+    }
+}

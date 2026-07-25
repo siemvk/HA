@@ -1,5 +1,5 @@
 name: oma Image Provider
-version: "0.2.1"
+version: "0.2.2"
 slug: oma_image_provider
 description: Niet verwijderen
 url: https://github.com/siemvk/HA

@@ -9,7 +9,7 @@ COPY package.json pnpm-lock.yaml ./
 RUN apk add --no-cache nodejs npm
 RUN npm install -g pnpm
 
-RUN pnpm install --frozen-lockfile
+RUN pnpm install
 
 COPY . .
 

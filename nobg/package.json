@@ -6,14 +6,18 @@
   "scripts": {
     "build": "react-router build",
     "dev": "react-router dev",
-    "start": "react-router-serve ./build/server/index.js",
+    "start": "node server.js",
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
     "@imgly/background-removal-node": "^1.4.5",
+    "@react-router/express": "^8",
     "@react-router/node": "^8",
     "@react-router/serve": "^8",
+    "compression": "^1.8.0",
+    "express": "^5.2.1",
     "isbot": "^5.1.36",
+    "morgan": "^1.10.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router": "^8"

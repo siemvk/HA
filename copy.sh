@@ -1,4 +1,2 @@
-cp -r ../nobg ./nobg
-
-rm -rf ./nobg/.git
-rm -rf ./nobg/.
+rm -rf ~/Documents/HA/nobg
+rsync -av --exclude 'node_modules' --exclude '.git' ~/Documents/nobg ~/Documents/HA

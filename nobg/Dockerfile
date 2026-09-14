@@ -28,6 +28,7 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --from=production-dependencies-env /app/node_modules /app/node_modules
 COPY --from=build-env /app/build /app/build
+COPY public ./public
 
 ENV HOST=0.0.0.0
 ENV PORT=3000

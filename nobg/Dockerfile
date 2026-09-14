@@ -3,14 +3,14 @@ FROM node:22-slim AS development-dependencies-env
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install
 
 # 2. Install production-only dependencies
 FROM node:22-slim AS production-dependencies-env
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile --prod
+RUN pnpm install --prod
 
 # 3. Build the application
 FROM node:22-slim AS build-env

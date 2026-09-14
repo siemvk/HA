@@ -46,9 +46,29 @@ const listener = createRequestListener(async (request) => {
       .replaceAll('"/assets/', `"${cleanIngress}/assets/`)
       .replaceAll("'/assets/", `'${cleanIngress}/assets/`)
       .replaceAll('"/favicon.', `"${cleanIngress}/favicon.`)
-      .replaceAll("'/favicon.", `'${cleanIngress}/favicon.`);
+      .replaceAll("'/favicon.", `'${cleanIngress}/favicon.`)
+      .replace(/"basename"\s*:\s*"[^"]*"/g, `"basename":${JSON.stringify(cleanIngress)}`);
 
-    const injection = `<base href="${cleanIngress}/">\n    <script>window.__INGRESS_PATH__ = ${JSON.stringify(cleanIngress)};</script>`;
+    const injection = `<base href="${cleanIngress}/">
+    <script>
+      window.__INGRESS_PATH__ = ${JSON.stringify(cleanIngress)};
+      if (window.__reactRouterContext) {
+        window.__reactRouterContext.basename = ${JSON.stringify(cleanIngress)};
+      }
+      try {
+        Object.defineProperty(window, '__reactRouterContext', {
+          configurable: true,
+          enumerable: true,
+          get() { return this._rrc; },
+          set(val) {
+            if (val && typeof val === 'object') {
+              val.basename = ${JSON.stringify(cleanIngress)};
+            }
+            this._rrc = val;
+          }
+        });
+      } catch (e) {}
+    </script>`;
     rewritten = rewritten.replace("<head>", `<head>\n    ${injection}`);
 
     const headers = new Headers(response.headers);

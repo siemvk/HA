@@ -3,7 +3,8 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import compression from "compression";
 import morgan from "morgan";
-import { createRequestHandler } from "@react-router/express";
+import { createRequestHandler } from "react-router";
+import { createRequestListener } from "@remix-run/node-fetch-server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -15,7 +16,7 @@ app.disable("x-powered-by");
 app.use(compression());
 app.use(morgan("tiny"));
 
-// Serve static assets
+// 1. Serve static assets
 app.use(
   "/assets",
   express.static(path.join(__dirname, "build/client/assets"), {
@@ -26,50 +27,42 @@ app.use(
 app.use(express.static(path.join(__dirname, "build/client"), { maxAge: "1h" }));
 app.use(express.static(path.join(__dirname, "public"), { maxAge: "1h" }));
 
-// Load the server SSR build
+// 2. Load the server SSR build
 const build = await import("./build/server/index.js");
+const handleRequest = createRequestHandler(build, process.env.NODE_ENV || "production");
 
-// Ingress rewrite middleware: rewrite asset paths for Home Assistant Ingress
-app.use((req, res, next) => {
-  const ingressPath = req.headers["x-ingress-path"] || "";
+// 3. Request listener with dynamic Home Assistant Ingress URL rewriting
+const listener = createRequestListener(async (request) => {
+  const ingressPath = request.headers.get("x-ingress-path") || "";
+  const response = await handleRequest(request);
 
-  if (!ingressPath) {
-    return next();
+  if (
+    ingressPath &&
+    response.headers.get("content-type")?.includes("text/html")
+  ) {
+    const cleanIngress = ingressPath.replace(/\/+$/, "");
+    const body = await response.text();
+    let rewritten = body
+      .replaceAll('"/assets/', `"${cleanIngress}/assets/`)
+      .replaceAll("'/assets/", `'${cleanIngress}/assets/`)
+      .replaceAll('"/favicon.', `"${cleanIngress}/favicon.`)
+      .replaceAll("'/favicon.", `'${cleanIngress}/favicon.`);
+
+    const injection = `<base href="${cleanIngress}/">\n    <script>window.__INGRESS_PATH__ = ${JSON.stringify(cleanIngress)};</script>`;
+    rewritten = rewritten.replace("<head>", `<head>\n    ${injection}`);
+
+    const headers = new Headers(response.headers);
+    headers.delete("content-length");
+    return new Response(rewritten, {
+      status: response.status,
+      headers,
+    });
   }
 
-  const cleanIngress = String(ingressPath).replace(/\/+$/, "");
-  const originalSend = res.send;
-
-  res.send = function (body) {
-    if (
-      typeof body === "string" &&
-      res.getHeader("content-type")?.toString().includes("text/html")
-    ) {
-      let rewritten = body
-        .replaceAll('"/assets/', `"${cleanIngress}/assets/`)
-        .replaceAll("'/assets/", `'${cleanIngress}/assets/`)
-        .replaceAll('"/favicon.', `"${cleanIngress}/favicon.`)
-        .replaceAll("'/favicon.", `'${cleanIngress}/favicon.`);
-
-      const injection = `\n    <base href="${cleanIngress}/">\n    <script>window.__INGRESS_PATH__ = ${JSON.stringify(cleanIngress)};</script>`;
-      rewritten = rewritten.replace("<head>", `<head>${injection}`);
-
-      return originalSend.call(this, rewritten);
-    }
-    return originalSend.call(this, body);
-  };
-
-  next();
+  return response;
 });
 
-// React Router handler
-app.all(
-  "/{*splat}",
-  createRequestHandler({
-    build,
-    mode: process.env.NODE_ENV || "production",
-  })
-);
+app.all("/{*splat}", listener);
 
 app.listen(port, host, () => {
   console.log(`NoBG listening on http://${host}:${port}`);

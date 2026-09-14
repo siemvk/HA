@@ -31,51 +31,63 @@ app.use(express.static(path.join(__dirname, "public"), { maxAge: "1h" }));
 const build = await import("./build/server/index.js");
 const handleRequest = createRequestHandler(build, process.env.NODE_ENV || "production");
 
-// 3. Request listener with dynamic Home Assistant Ingress URL rewriting
+// 3. Request listener with Origin normalization & Ingress asset rewriting
 const listener = createRequestListener(async (request) => {
   const ingressPath = request.headers.get("x-ingress-path") || "";
-  const response = await handleRequest(request);
+  const cleanIngress = ingressPath ? ingressPath.replace(/\/+$/, "") : "";
 
+  // Normalize host & proto to match the caller's origin (prevents CSRF/Origin mismatch on POST)
+  const proto = request.headers.get("x-forwarded-proto") || "http";
+  const reqHost = request.headers.get("x-forwarded-host") || request.headers.get("host") || `${host}:${port}`;
+  const rawUrl = new URL(request.url);
+
+  // If request URL path starts with ingressPath, strip it so React Router routes correctly on server
+  let pathname = rawUrl.pathname;
+  if (cleanIngress && pathname.startsWith(cleanIngress)) {
+    pathname = pathname.slice(cleanIngress.length) || "/";
+  }
+
+  const normalizedUrl = new URL(`${proto}://${reqHost}${pathname}${rawUrl.search}`);
+  const headers = new Headers(request.headers);
+
+  // Ensure Host header matches forwarded host for React Router origin verification
+  if (request.headers.get("x-forwarded-host")) {
+    headers.set("host", request.headers.get("x-forwarded-host"));
+  }
+
+  const reqInit = {
+    method: request.method,
+    headers,
+    signal: request.signal,
+  };
+
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    reqInit.body = request.body;
+    // @ts-ignore
+    reqInit.duplex = "half";
+  }
+
+  const normalizedRequest = new Request(normalizedUrl.href, reqInit);
+  const response = await handleRequest(normalizedRequest);
+
+  // Rewrite asset paths & serialized basename for Ingress HTML responses without breaking React 19 hydration
   if (
-    ingressPath &&
+    cleanIngress &&
     response.headers.get("content-type")?.includes("text/html")
   ) {
-    const cleanIngress = ingressPath.replace(/\/+$/, "");
     const body = await response.text();
-    let rewritten = body
+    const rewritten = body
       .replaceAll('"/assets/', `"${cleanIngress}/assets/`)
       .replaceAll("'/assets/", `'${cleanIngress}/assets/`)
       .replaceAll('"/favicon.', `"${cleanIngress}/favicon.`)
       .replaceAll("'/favicon.", `'${cleanIngress}/favicon.`)
       .replace(/"basename"\s*:\s*"[^"]*"/g, `"basename":${JSON.stringify(cleanIngress)}`);
 
-    const injection = `<base href="${cleanIngress}/">
-    <script>
-      window.__INGRESS_PATH__ = ${JSON.stringify(cleanIngress)};
-      if (window.__reactRouterContext) {
-        window.__reactRouterContext.basename = ${JSON.stringify(cleanIngress)};
-      }
-      try {
-        Object.defineProperty(window, '__reactRouterContext', {
-          configurable: true,
-          enumerable: true,
-          get() { return this._rrc; },
-          set(val) {
-            if (val && typeof val === 'object') {
-              val.basename = ${JSON.stringify(cleanIngress)};
-            }
-            this._rrc = val;
-          }
-        });
-      } catch (e) {}
-    </script>`;
-    rewritten = rewritten.replace("<head>", `<head>\n    ${injection}`);
-
-    const headers = new Headers(response.headers);
-    headers.delete("content-length");
+    const resHeaders = new Headers(response.headers);
+    resHeaders.delete("content-length");
     return new Response(rewritten, {
       status: response.status,
-      headers,
+      headers: resHeaders,
     });
   }
 

@@ -1,0 +1,17 @@
+name: wsTunnel
+version: "0.1.0"
+slug: ws_tunnel
+description: Niet verwijderen
+url: https://github.com/siemvk/HA
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: auto
+init: false
+ingress: false
+panel_admin: true
+ports:
+  8085/tcp: 8085
+ports_description:
+  8085/tcp: De tunnel op de websocket. hou rekening met wss://

@@ -1,5 +1,38 @@
 import { parseArgs } from "node:util";
 
+export async function handleHttpTunnelRequest(
+  ws: WebSocket,
+  id: string,
+  jsonPayload: string,
+  target: string,
+): Promise<void> {
+  try {
+    const { method, path, headers = {}, body, isBase64 } = JSON.parse(jsonPayload);
+    delete headers.host;
+    delete headers["content-length"];
+
+    const res = await fetch(new URL(path, target), {
+      method,
+      headers,
+      body: body ? (isBase64 ? Buffer.from(body, "base64") : body) : undefined,
+      redirect: "manual",
+    });
+
+    const resHeaders = Array.from(res.headers.entries()).filter(
+      ([k]) => k !== "content-encoding" && k !== "content-length" && k !== "transfer-encoding",
+    );
+    const resBody = Buffer.from(await res.arrayBuffer()).toString("base64");
+    ws.send(`${id}$${JSON.stringify({
+      status: res.status,
+      headers: resHeaders,
+      body: resBody,
+      isBase64: true,
+    })}`);
+  } catch (err) {
+    ws.send(`${id}$${JSON.stringify({ status: 502, body: `Bad Gateway: ${err}` })}`);
+  }
+}
+
 export function forwardHttp(target: string, tunnelUrl: string): WebSocket {
   const url = new URL(tunnelUrl);
   if (!url.searchParams.has("httphost") && !url.searchParams.has("host")) {
@@ -12,7 +45,7 @@ export function forwardHttp(target: string, tunnelUrl: string): WebSocket {
   ws.onclose = (e) => console.log(`Tunnel closed (${e.code} ${e.reason})`);
   ws.onerror = (e) => console.error("Tunnel error:", e);
 
-  ws.onmessage = async (e) => {
+  ws.onmessage = (e) => {
     const raw = String(e.data);
     const sep = raw.indexOf("$");
     if (sep === -1) return;
@@ -21,31 +54,7 @@ export function forwardHttp(target: string, tunnelUrl: string): WebSocket {
     const payload = raw.slice(sep + 1);
     if (!payload.startsWith("!TUNNEL;HTTP;")) return;
 
-    try {
-      const { method, path, headers = {}, body, isBase64 } = JSON.parse(payload.slice("!TUNNEL;HTTP;".length));
-      delete headers.host;
-      delete headers["content-length"];
-
-      const res = await fetch(new URL(path, target), {
-        method,
-        headers,
-        body: body ? (isBase64 ? Buffer.from(body, "base64") : body) : undefined,
-        redirect: "manual",
-      });
-
-      const resHeaders = Array.from(res.headers.entries()).filter(
-        ([k]) => k !== "content-encoding" && k !== "content-length" && k !== "transfer-encoding",
-      );
-      const resBody = Buffer.from(await res.arrayBuffer()).toString("base64");
-      ws.send(`${id}$${JSON.stringify({
-        status: res.status,
-        headers: resHeaders,
-        body: resBody,
-        isBase64: true,
-      })}`);
-    } catch (err) {
-      ws.send(`${id}$${JSON.stringify({ status: 502, body: `Bad Gateway: ${err}` })}`);
-    }
+    void handleHttpTunnelRequest(ws, id, payload.slice("!TUNNEL;HTTP;".length), target);
   };
 
   return ws;

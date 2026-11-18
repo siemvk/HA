@@ -38,7 +38,20 @@ const serverConnection: Record<string, {
   clients: Map<string, ServerWebSocket<WSData>>;
   pendingHttp: Map<string, PendingHttp>;
   httpSupport: boolean;
+  createdAt: number;
 }> = {};
+
+function closeLobby(lobbyId: string, closeHost?: { code: number; reason: string }) {
+  const lobby = serverConnection[lobbyId];
+  if (!lobby) return false;
+  delete serverConnection[lobbyId];
+  for (const client of lobby.clients.values()) client.close();
+  for (const pending of lobby.pendingHttp.values()) {
+    pending.resolve(new Response(NO_SERVER, { status: 502 }));
+  }
+  if (closeHost) lobby.socket.close(closeHost.code, closeHost.reason);
+  return true;
+}
 
 function connectClient(ws: ServerWebSocket<WSData>, lobbyId: string, pass?: string) {
   const lobby = serverConnection[lobbyId];
@@ -71,6 +84,7 @@ function hostLobby(ws: ServerWebSocket<WSData>, lobbyId: string, pass?: string, 
     clients: new Map(),
     pendingHttp: new Map(),
     httpSupport: http,
+    createdAt: Date.now(),
   };
   return "ok";
 }
@@ -115,6 +129,30 @@ const server = Bun.serve<WSData>({
     }
 
     if (!subdomainLobby && url.pathname === "/") return new Response(ABOUT_STRING);
+
+    if (!subdomainLobby && (url.pathname === "/_tunnels" || url.pathname.startsWith("/_tunnels/"))) {
+      if (!isAuthorizedToHost(true, secret)) return new Response("Unauthorized", { status: 401 });
+      if (url.pathname === "/_tunnels" && req.method === "GET") {
+        return Response.json(
+          Object.values(serverConnection).map((l) => ({
+            id: l.id,
+            http: l.httpSupport,
+            protected: Boolean(l.password),
+            clients: l.clients.size,
+            pendingHttp: l.pendingHttp.size,
+            createdAt: l.createdAt,
+          })),
+        );
+      }
+      if (url.pathname.startsWith("/_tunnels/") && req.method === "DELETE") {
+        const targetId = decodeURIComponent(url.pathname.slice("/_tunnels/".length));
+        if (!closeLobby(targetId, { code: 1000, reason: "Closed by admin" })) {
+          return new Response("Not Found", { status: 404 });
+        }
+        return Response.json({ closed: targetId });
+      }
+      return new Response("Method Not Allowed", { status: 405 });
+    }
 
     const lobby = serverConnection[lobbyId];
     if (lobby?.httpSupport) {
@@ -259,13 +297,7 @@ const server = Bun.serve<WSData>({
       const lobby = serverConnection[ws.data.connectionId];
       if (!lobby) return;
       if (ws.data.host) {
-        for (const client of lobby.clients.values()) {
-          client.close();
-        }
-        for (const pending of lobby.pendingHttp.values()) {
-          pending.resolve(new Response(NO_SERVER, { status: 502 }));
-        }
-        delete serverConnection[ws.data.connectionId];
+        closeLobby(ws.data.connectionId);
       } else if (ws.data.connected) {
         if (lobby.clients.delete(ws.data.id)) {
           lobby.socket.send(`${ws.data.id}$!TUNNEL;CLOSE`);

@@ -1,0 +1,320 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { parseArgs } from "node:util";
+import { handleHttpTunnelRequest } from "./http";
+
+function readConfigFile(name: string): string | undefined {
+  try {
+    return readFileSync(join(homedir(), ".config", "svk-tunnels", name), "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function loadDefaultSecret(): string | undefined {
+  return process.env.SECRET || readConfigFile("secret");
+}
+
+function readDomains(name: string): string[] {
+  const raw = readConfigFile(name);
+  if (!raw) return [];
+  return raw
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter((s) => s && !s.startsWith("#"))
+    .map((s) => s.replace(/^(wss?|https?):\/\//, "").replace(/\/+$/, ""));
+}
+
+function getPublicLinks(tunnelBase: string, lobby: string, hasWs: boolean, hasHttp: boolean): string[] {
+  const secure = new URL(tunnelBase).protocol === "wss:";
+  const protos = [
+    hasHttp && (secure ? "https:" : "http:"),
+    hasWs && (secure ? "wss:" : "ws:"),
+  ].filter(Boolean) as string[];
+  const encoded = encodeURIComponent(lobby);
+
+  const subs = readDomains("subdomaineddomains");
+  if (subs.length) return subs.flatMap((d) => protos.map((p) => `${p}//${lobby}.${d}`));
+  return readDomains("patheddomains").flatMap((d) => protos.map((p) => `${p}//${d}/${encoded}`));
+}
+
+function withScheme(raw: string, scheme: "ws" | "http"): string {
+  return /^(wss?|https?):\/\//.test(raw) ? raw : `${scheme}://${raw}`;
+}
+
+function buildTunnelUrl(
+  base: string,
+  lobby: string,
+  opts: { pass?: string; secret?: string; mode?: "host" | "httphost" },
+): string {
+  const url = new URL(base);
+  url.pathname = `/${encodeURIComponent(lobby)}`;
+  if (opts.pass) url.searchParams.set("pass", opts.pass);
+  if (opts.secret) url.searchParams.set("secret", opts.secret);
+  if (opts.mode) url.searchParams.set(opts.mode, "1");
+  return url.toString();
+}
+
+export function startHostBridge(opts: {
+  tunnelUrl: string;
+  wsTarget?: string;
+  httpTarget?: string;
+  links?: string[];
+}): WebSocket {
+  const tunnel = new WebSocket(opts.tunnelUrl);
+  const clients = new Map<string, { ws: WebSocket; queue: string[] }>();
+
+  tunnel.onopen = () => {
+    const targets = [
+      opts.wsTarget && `ws->${opts.wsTarget}`,
+      opts.httpTarget && `http->${opts.httpTarget}`,
+    ].filter(Boolean).join(", ");
+    console.log(`Host bridge connected (${targets})`);
+    for (const link of opts.links ?? []) console.log(`  -> ${link}`);
+  };
+
+  tunnel.onmessage = (e) => {
+    const raw = String(e.data);
+    const sep = raw.indexOf("$");
+    if (sep === -1) return;
+
+    const id = raw.slice(0, sep);
+    const payload = raw.slice(sep + 1);
+
+    if (opts.httpTarget && payload.startsWith("!TUNNEL;HTTP;")) {
+      void handleHttpTunnelRequest(tunnel, id, payload.slice("!TUNNEL;HTTP;".length), opts.httpTarget);
+      return;
+    }
+
+    if (!opts.wsTarget) return;
+
+    if (payload === "!TUNNEL;OPEN") {
+      const local = new WebSocket(opts.wsTarget);
+      const entry = { ws: local, queue: [] as string[] };
+      clients.set(id, entry);
+
+      local.onopen = () => {
+        for (const msg of entry.queue) local.send(msg);
+        entry.queue.length = 0;
+      };
+      local.onmessage = (ev) => {
+        if (tunnel.readyState !== WebSocket.OPEN) return;
+        const data = typeof ev.data === "string" ? ev.data : Buffer.from(ev.data).toString();
+        tunnel.send(`${id}$${data}`);
+      };
+      local.onclose = () => {
+        if (!clients.delete(id)) return;
+        if (tunnel.readyState === WebSocket.OPEN) tunnel.send(`${id}$!TUNNEL;CLOSE`);
+      };
+      local.onerror = () => local.close();
+      return;
+    }
+
+    const entry = clients.get(id);
+    if (!entry) return;
+
+    if (payload === "!TUNNEL;CLOSE") {
+      clients.delete(id);
+      entry.ws.close();
+      return;
+    }
+
+    if (entry.ws.readyState === WebSocket.OPEN) entry.ws.send(payload);
+    else if (entry.ws.readyState === WebSocket.CONNECTING) entry.queue.push(payload);
+  };
+
+  tunnel.onclose = (e) => {
+    for (const entry of clients.values()) entry.ws.close();
+    clients.clear();
+    console.log(`Host tunnel closed (${e.code} ${e.reason})`);
+  };
+  tunnel.onerror = (e) => console.error("Host tunnel error:", e);
+
+  return tunnel;
+}
+
+export function startClientBridge(opts: { tunnelUrl: string; listen: string }) {
+  const [hostPart, portPart] = opts.listen.includes(":")
+    ? opts.listen.split(":")
+    : ["127.0.0.1", opts.listen];
+  const hostname = hostPart || "127.0.0.1";
+  const port = Number(portPart);
+
+  const server = Bun.serve<{ remote: WebSocket; queue: (string | Buffer)[] }>({
+    hostname,
+    port,
+    fetch(req, srv) {
+      if (srv.upgrade(req, { data: { remote: null as unknown as WebSocket, queue: [] } })) {
+        return undefined;
+      }
+      return new Response("ws-tunnel client bridge");
+    },
+    websocket: {
+      open(ws) {
+        const remote = new WebSocket(opts.tunnelUrl);
+        ws.data.remote = remote;
+
+        remote.onopen = () => {
+          for (const msg of ws.data.queue) remote.send(msg);
+          ws.data.queue.length = 0;
+        };
+        remote.onmessage = (ev) => {
+          if (ws.readyState === 1) ws.send(ev.data);
+        };
+        remote.onclose = () => ws.close();
+        remote.onerror = () => ws.close();
+      },
+      message(ws, msg) {
+        const data = typeof msg === "string" ? msg : Buffer.from(msg);
+        if (ws.data.remote.readyState === WebSocket.OPEN) ws.data.remote.send(data);
+        else if (ws.data.remote.readyState === WebSocket.CONNECTING) ws.data.queue.push(data);
+      },
+      close(ws) {
+        ws.data.remote.close();
+      },
+    },
+  });
+
+  console.log(`Client bridge listening on ws://${server.hostname}:${server.port} -> ${opts.tunnelUrl}`);
+  return server;
+}
+
+type BindingInfo = {
+  id: string;
+  http: boolean;
+  protected: boolean;
+  clients: number;
+  pendingHttp: number;
+  createdAt: number;
+};
+
+function toHttpUrl(base: string, path: string): string {
+  const url = new URL(base);
+  url.protocol = url.protocol === "wss:" || url.protocol === "https:" ? "https:" : "http:";
+  url.pathname = path;
+  url.search = "";
+  return url.toString();
+}
+
+function formatAge(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m${s % 60}s`;
+  return `${Math.floor(m / 60)}h${m % 60}m`;
+}
+
+async function manageFetch(base: string, path: string, secret?: string, method = "GET") {
+  const headers: Record<string, string> = {};
+  if (secret) headers.authorization = `Bearer ${secret}`;
+  const res = await fetch(toHttpUrl(base, path), { method, headers });
+  if (!res.ok) {
+    console.error(`${res.status} ${res.statusText}: ${await res.text()}`);
+    process.exit(1);
+  }
+  return res.json();
+}
+
+function printBindings(base: string, rows: BindingInfo[]) {
+  if (!rows.length) {
+    console.log("No active bindings.");
+    return;
+  }
+  const now = Date.now();
+  console.table(
+    rows.map((r) => ({
+      lobby: r.id,
+      type: r.http ? "http+ws" : "ws",
+      clients: r.clients,
+      pendingHttp: r.pendingHttp,
+      auth: r.protected ? "pass" : "open",
+      uptime: formatAge(now - r.createdAt),
+      link: getPublicLinks(base, r.id, !r.http, r.http)[0] ?? "",
+    })),
+  );
+}
+
+const USAGE = `Usage:
+  bun run src/bridge.ts tunnel --lobby <name> [--ws <host:port>] [--http <host:port>] [--connect <[host:]port>] [--url <url>] [--pass <pass>] [--secret <token>]
+  bun run src/bridge.ts manage <list|ls|watch|close> [lobby] [--url <url>] [--secret <token>] [--json] [--interval <ms>]`;
+
+if (import.meta.main) {
+  const [cmd, ...rest] = process.argv.slice(2);
+  if (cmd !== "tunnel" && cmd !== "manage") {
+    console.error(USAGE);
+    process.exit(1);
+  }
+
+  const { values, positionals } = parseArgs({
+    args: rest,
+    allowPositionals: true,
+    options: {
+      url: { type: "string", default: "wss://tunnel.siemvk.nl" },
+      lobby: { type: "string" },
+      ws: { type: "string" },
+      http: { type: "string" },
+      connect: { type: "string" },
+      pass: { type: "string" },
+      secret: { type: "string" },
+      json: { type: "boolean", default: false },
+      interval: { type: "string", default: "2000" },
+    },
+  });
+
+  const secret = values.secret ?? loadDefaultSecret();
+
+  if (cmd === "tunnel") {
+    if (!values.lobby || (!values.ws && !values.http && !values.connect)) {
+      console.error(USAGE);
+      process.exit(1);
+    }
+
+    if (values.ws || values.http) {
+      const tunnelUrl = buildTunnelUrl(values.url, values.lobby, {
+        pass: values.pass,
+        secret,
+        mode: values.http ? "httphost" : "host",
+      });
+      startHostBridge({
+        tunnelUrl,
+        wsTarget: values.ws ? withScheme(values.ws, "ws") : undefined,
+        httpTarget: values.http ? withScheme(values.http, "http") : undefined,
+        links: getPublicLinks(values.url, values.lobby, Boolean(values.ws), Boolean(values.http)),
+      });
+    }
+
+    if (values.connect) {
+      const tunnelUrl = buildTunnelUrl(values.url, values.lobby, { pass: values.pass });
+      startClientBridge({ tunnelUrl, listen: values.connect });
+    }
+  } else {
+    const [sub = "list", arg] = positionals;
+    if (sub === "list" || sub === "ls") {
+      const rows = (await manageFetch(values.url, "/_tunnels", secret)) as BindingInfo[];
+      if (values.json) console.log(JSON.stringify(rows, null, 2));
+      else printBindings(values.url, rows);
+    } else if (sub === "watch") {
+      const ms = Math.max(250, Number(values.interval) || 2000);
+      const tick = async () => {
+        const rows = (await manageFetch(values.url, "/_tunnels", secret)) as BindingInfo[];
+        console.clear();
+        console.log(`${new Date().toLocaleTimeString()} — ${values.url}`);
+        printBindings(values.url, rows);
+      };
+      await tick();
+      setInterval(() => void tick(), ms);
+    } else if (sub === "close") {
+      const target = arg ?? values.lobby;
+      if (!target) {
+        console.error("Usage: bun run src/bridge.ts manage close <lobby>");
+        process.exit(1);
+      }
+      const res = (await manageFetch(values.url, `/_tunnels/${encodeURIComponent(target)}`, secret, "DELETE")) as { closed: string };
+      console.log(`Closed ${res.closed}`);
+    } else {
+      console.error(USAGE);
+      process.exit(1);
+    }
+  }
+}

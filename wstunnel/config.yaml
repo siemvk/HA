@@ -1,5 +1,5 @@
 name: wsTunnel
-version: "0.1.0"
+version: "0.2.0"
 slug: ws_tunnel
 description: Niet verwijderen
 url: https://github.com/siemvk/HA
@@ -14,4 +14,12 @@ panel_admin: true
 ports:
   8085/tcp: 8085
 ports_description:
-  8085/tcp: De tunnel op de websocket. hou rekening met wss://
+  8085/tcp: De tunnel (WebSocket en HTTP). hou rekening met wss:// / https://
+options:
+  protect_level: "HTTP"
+  secret: ""
+  subdomain_domains: ""
+schema:
+  protect_level: "list(NONE|HTTP|SOCKET)"
+  secret: "password?"
+  subdomain_domains: "str?"

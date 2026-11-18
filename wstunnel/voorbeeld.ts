@@ -1,4 +1,4 @@
-const ws = new WebSocket("ws://localhost:8085");
+const ws = new WebSocket("wss://tunnel.siemvk.nl/testing");
 
 ws.onmessage = (e) => {
   console.log(e.data);

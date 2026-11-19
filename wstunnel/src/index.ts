@@ -1,5 +1,6 @@
 import { randomUUIDv7, type ServerWebSocket } from "bun";
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { ABOUT_STRING, NO_SERVER } from "./about";
 
 type WSData = {
@@ -25,14 +26,47 @@ const protectLevel: ProtectLevel =
   rawProtect === "HTTP" || rawProtect === "SOCKET" ? rawProtect : "NONE";
 
 const hostToken = process.env.SECRET;
+const defaultCooldownMs = Number(process.env.FORCE_STOP_COOLDOWN_MS ?? 60_000);
+
+type Privilege = "ws" | "http" | "admin";
+type User = {
+  name: string;
+  token: string;
+  privileges: Privilege[];
+  blocked: boolean;
+  createdAt: number;
+};
+
+const usersFile = process.env.USERS_FILE ?? (existsSync("/data") ? "/data/users.json" : "users.json");
+const users = new Map<string, User>();
+try {
+  if (existsSync(usersFile)) {
+    for (const u of JSON.parse(readFileSync(usersFile, "utf8")) as User[]) {
+      users.set(u.name, u);
+    }
+  }
+} catch {}
+
+function saveUsers() {
+  writeFileSync(usersFile, JSON.stringify([...users.values()], null, 2));
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ba.length === bb.length && timingSafeEqual(ba, bb);
+}
 
 type PendingHttp = {
   resolve: (res: Response) => void;
   rewritePrefix: string | null;
 };
 
+const cooldowns = new Map<string, number>();
+
 const serverConnection: Record<string, {
   id: string;
+  owner: string;
   socket: ServerWebSocket<WSData>;
   password?: string;
   clients: Map<string, ServerWebSocket<WSData>>;
@@ -41,10 +75,11 @@ const serverConnection: Record<string, {
   createdAt: number;
 }> = {};
 
-function closeLobby(lobbyId: string, closeHost?: { code: number; reason: string }) {
+function closeLobby(lobbyId: string, closeHost?: { code: number; reason: string }, cooldownMs = 0) {
   const lobby = serverConnection[lobbyId];
   if (!lobby) return false;
   delete serverConnection[lobbyId];
+  if (cooldownMs > 0) cooldowns.set(lobbyId, Date.now() + cooldownMs);
   for (const client of lobby.clients.values()) client.close();
   for (const pending of lobby.pendingHttp.values()) {
     pending.resolve(new Response(NO_SERVER, { status: 502 }));
@@ -53,9 +88,15 @@ function closeLobby(lobbyId: string, closeHost?: { code: number; reason: string 
   return true;
 }
 
+function closeUserLobbies(owner: string, reason: string) {
+  for (const l of Object.values(serverConnection)) {
+    if (l.owner === owner) closeLobby(l.id, { code: 1008, reason }, defaultCooldownMs);
+  }
+}
+
 function connectClient(ws: ServerWebSocket<WSData>, lobbyId: string, pass?: string) {
   const lobby = serverConnection[lobbyId];
-  if (!lobby || (lobby.password && lobby.password !== pass)) return false;
+  if (!lobby || (lobby.password && (!pass || !safeEqual(pass, lobby.password)))) return false;
   ws.data.connectionId = lobbyId;
   ws.data.connected = true;
   lobby.clients.set(ws.data.id, ws);
@@ -63,22 +104,63 @@ function connectClient(ws: ServerWebSocket<WSData>, lobbyId: string, pass?: stri
   return true;
 }
 
-function isAuthorizedToHost(http: boolean, secret?: string): boolean {
-  if (protectLevel === "NONE") return true;
-  if (protectLevel === "HTTP" && !http) return true;
-  if (!hostToken || !secret) return false;
-  const a = Buffer.from(secret);
-  const b = Buffer.from(hostToken);
-  return a.length === b.length && timingSafeEqual(a, b);
+type Actor = { name: string; privileges: Set<Privilege>; isRoot: boolean };
+
+function resolveActor(secret?: string): Actor | "blocked" | null {
+  if (hostToken && secret && safeEqual(secret, hostToken)) {
+    return { name: "root", privileges: new Set<Privilege>(["ws", "http", "admin"]), isRoot: true };
+  }
+  if (secret) {
+    for (const u of users.values()) {
+      if (safeEqual(secret, u.token)) {
+        return u.blocked ? "blocked" : { name: u.name, privileges: new Set(u.privileges), isRoot: false };
+      }
+    }
+  }
+  return null;
+}
+
+function authorizeHost(http: boolean, secret?: string): Actor | null {
+  const actor = resolveActor(secret);
+  if (actor === "blocked") return null;
+  if (actor) {
+    if (actor.isRoot || actor.privileges.has("admin")) return actor;
+    if (http ? actor.privileges.has("http") : actor.privileges.has("ws")) return actor;
+    return null;
+  }
+  if (secret) return null;
+  if (protectLevel === "NONE" || (protectLevel === "HTTP" && !http)) {
+    return { name: "anonymous", privileges: new Set<Privilege>(["ws", "http"]), isRoot: false };
+  }
+  return null;
+}
+
+function canManage(secret: string | undefined, mode: "view" | "admin"): Actor | null {
+  const actor = resolveActor(secret);
+  if (actor === "blocked") return null;
+  if (actor) {
+    if (actor.isRoot || actor.privileges.has("admin")) return actor;
+    if (mode === "view" && (actor.privileges.has("ws") || actor.privileges.has("http"))) return actor;
+    return null;
+  }
+  if (!secret && !hostToken && protectLevel === "NONE") {
+    return { name: "root", privileges: new Set<Privilege>(["ws", "http", "admin"]), isRoot: true };
+  }
+  return null;
 }
 
 function hostLobby(ws: ServerWebSocket<WSData>, lobbyId: string, pass?: string, http = false, secret?: string) {
-  if (!isAuthorizedToHost(http, secret ?? ws.data.secret)) return "unauthorized";
+  const actor = authorizeHost(http, secret ?? ws.data.secret);
+  if (!actor) return "unauthorized";
+  const until = cooldowns.get(lobbyId);
+  if (until && until > Date.now()) return "cooldown";
+  cooldowns.delete(lobbyId);
   if (serverConnection[lobbyId]) return "exists";
   ws.data.connectionId = lobbyId;
   ws.data.host = true;
   serverConnection[lobbyId] = {
     id: lobbyId,
+    owner: actor.name,
     password: pass || undefined,
     socket: ws,
     clients: new Map(),
@@ -105,11 +187,17 @@ const server = Bun.serve<WSData>({
     const subPath = subdomainLobby
       ? url.pathname + url.search
       : (slash === -1 ? "/" : url.pathname.slice(slash)) + url.search;
-    const pass = url.searchParams.get("pass") ?? url.searchParams.get("password") ?? undefined;
+    const queryPass = url.searchParams.get("pass") ?? url.searchParams.get("password") ?? undefined;
+    const cookiePass = req.headers.get("cookie")?.match(/(?:^|;\s*)__tunnel_pass=([^;]+)/)?.[1];
+    const authHeader = req.headers.get("authorization");
+    const basicRaw = authHeader?.match(/^Basic\s+(.+)/i)?.[1];
+    const basicDecoded = basicRaw ? Buffer.from(basicRaw, "base64").toString("utf8") : undefined;
+    const basicPass = basicDecoded?.includes(":") ? basicDecoded.slice(basicDecoded.indexOf(":") + 1) : undefined;
+    const pass = queryPass ?? (cookiePass ? decodeURIComponent(cookiePass) : undefined) ?? basicPass;
     const secret =
       url.searchParams.get("secret") ??
       url.searchParams.get("token") ??
-      req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
+      authHeader?.match(/^Bearer\s+(.+)/i)?.[1] ??
       undefined;
     const host = url.searchParams.has("host") || url.searchParams.has("httphost");
     const http = url.searchParams.has("http") || url.searchParams.has("httphost");
@@ -131,11 +219,12 @@ const server = Bun.serve<WSData>({
     if (!subdomainLobby && url.pathname === "/") return new Response(ABOUT_STRING);
 
     if (!subdomainLobby && (url.pathname === "/_tunnels" || url.pathname.startsWith("/_tunnels/"))) {
-      if (!isAuthorizedToHost(true, secret)) return new Response("Unauthorized", { status: 401 });
       if (url.pathname === "/_tunnels" && req.method === "GET") {
+        if (!canManage(secret, "view")) return new Response("Unauthorized", { status: 401 });
         return Response.json(
           Object.values(serverConnection).map((l) => ({
             id: l.id,
+            owner: l.owner,
             http: l.httpSupport,
             protected: Boolean(l.password),
             clients: l.clients.size,
@@ -146,18 +235,79 @@ const server = Bun.serve<WSData>({
       }
       if (url.pathname.startsWith("/_tunnels/") && req.method === "DELETE") {
         const targetId = decodeURIComponent(url.pathname.slice("/_tunnels/".length));
-        if (!closeLobby(targetId, { code: 1000, reason: "Closed by admin" })) {
+        const target = serverConnection[targetId];
+        const actor = canManage(secret, "view");
+        if (!actor || (target && !actor.isRoot && !actor.privileges.has("admin") && target.owner !== actor.name)) {
+          return new Response("Unauthorized", { status: 401 });
+        }
+        const cooldownParam = url.searchParams.get("cooldown");
+        const cooldownMs = cooldownParam !== null ? Math.max(0, Number(cooldownParam) || 0) * 1000 : defaultCooldownMs;
+        if (!closeLobby(targetId, { code: 1000, reason: "Closed by admin" }, cooldownMs)) {
           return new Response("Not Found", { status: 404 });
         }
-        return Response.json({ closed: targetId });
+        return Response.json({ closed: targetId, cooldownSec: Math.round(cooldownMs / 1000) });
+      }
+      return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    if (!subdomainLobby && (url.pathname === "/_users" || url.pathname.startsWith("/_users/"))) {
+      if (!canManage(secret, "admin")) return new Response("Unauthorized", { status: 401 });
+      if (url.pathname === "/_users" && req.method === "GET") {
+        return Response.json(
+          [...users.values()].map(({ name, privileges, blocked, createdAt }) => ({
+            name,
+            privileges,
+            blocked,
+            createdAt,
+          })),
+        );
+      }
+      if (url.pathname === "/_users" && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as Partial<User>;
+        const name = body.name?.trim();
+        if (!name) return new Response("Missing name", { status: 400 });
+        const user: User = {
+          name,
+          token: body.token?.trim() || randomBytes(24).toString("hex"),
+          privileges: Array.isArray(body.privileges) ? body.privileges : ["ws", "http"],
+          blocked: Boolean(body.blocked),
+          createdAt: users.get(name)?.createdAt ?? Date.now(),
+        };
+        users.set(name, user);
+        saveUsers();
+        if (user.blocked) closeUserLobbies(name, "User blocked");
+        return Response.json(user, { status: 201 });
+      }
+      if (url.pathname.startsWith("/_users/")) {
+        const name = decodeURIComponent(url.pathname.slice("/_users/".length));
+        const user = users.get(name);
+        if (!user) return new Response("Not Found", { status: 404 });
+        if (req.method === "PATCH") {
+          const body = (await req.json().catch(() => ({}))) as Partial<User>;
+          if (Array.isArray(body.privileges)) user.privileges = body.privileges;
+          if (typeof body.blocked === "boolean") user.blocked = body.blocked;
+          if (typeof body.token === "string" && body.token.trim()) user.token = body.token.trim();
+          saveUsers();
+          if (user.blocked) closeUserLobbies(name, "User blocked");
+          return Response.json({ name: user.name, privileges: user.privileges, blocked: user.blocked, createdAt: user.createdAt });
+        }
+        if (req.method === "DELETE") {
+          users.delete(name);
+          saveUsers();
+          closeUserLobbies(name, "User deleted");
+          return Response.json({ deleted: name });
+        }
       }
       return new Response("Method Not Allowed", { status: 405 });
     }
 
     const lobby = serverConnection[lobbyId];
     if (lobby?.httpSupport) {
-      if (lobby.password && lobby.password !== pass) {
-        return new Response("Unauthorized", { status: 401 });
+      if (lobby.password && (!pass || !safeEqual(pass, lobby.password))) {
+        return new Response("Unauthorized", {
+          status: 401,
+          headers: { "www-authenticate": 'Basic realm="Tunnel"' },
+        });
       }
       const reqId = randomUUIDv7();
       const body = req.body ? Buffer.from(await req.arrayBuffer()).toString("base64") : undefined;
@@ -168,11 +318,18 @@ const server = Bun.serve<WSData>({
           resolve(new Response("Gateway Timeout", { status: 504 }));
         }, 30_000);
 
+        const cookiePath = subdomainLobby ? "/" : `/${encodeURIComponent(lobbyId)}`;
         lobby.pendingHttp.set(reqId, {
-          rewritePrefix: subdomainLobby ? null : `/${encodeURIComponent(lobbyId)}`,
+          rewritePrefix: subdomainLobby ? null : cookiePath,
           resolve: (res) => {
             clearTimeout(timer);
-            resolve(res);
+            if (queryPass) {
+              const headers = new Headers(res.headers);
+              headers.append("set-cookie", `__tunnel_pass=${encodeURIComponent(queryPass)}; Path=${cookiePath}; HttpOnly; SameSite=Lax`);
+              resolve(new Response(res.body, { status: res.status, headers }));
+            } else {
+              resolve(res);
+            }
           },
         });
 
@@ -200,6 +357,7 @@ const server = Bun.serve<WSData>({
         const res = hostLobby(ws, connectionId, pass, http);
         if (res === "unauthorized") ws.close(1008, "Unauthorized");
         else if (res === "exists") ws.close(1008, "Lobby already hosted");
+        else if (res === "cooldown") ws.close(1008, "Lobby in cooldown after force stop");
       } else {
         if (!connectClient(ws, connectionId, pass)) {
           ws.close(1008, "Invalid lobby or password");
@@ -216,9 +374,9 @@ const server = Bun.serve<WSData>({
         if (command === "CONNECT") {
           connectClient(ws, lobbyId, pass);
         } else if (command === "HOST" || command === "HTTPHOST") {
-          if (hostLobby(ws, lobbyId, pass, command === "HTTPHOST", secret) === "unauthorized") {
-            ws.close(1008, "Unauthorized");
-          }
+          const res = hostLobby(ws, lobbyId, pass, command === "HTTPHOST", secret);
+          if (res === "unauthorized") ws.close(1008, "Unauthorized");
+          else if (res === "cooldown") ws.close(1008, "Lobby in cooldown after force stop");
         }
         return;
       }

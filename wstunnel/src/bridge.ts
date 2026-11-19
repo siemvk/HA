@@ -182,6 +182,7 @@ export function startClientBridge(opts: { tunnelUrl: string; listen: string }) {
 
 type BindingInfo = {
   id: string;
+  owner: string;
   http: boolean;
   protected: boolean;
   clients: number;
@@ -189,11 +190,20 @@ type BindingInfo = {
   createdAt: number;
 };
 
-function toHttpUrl(base: string, path: string): string {
+type UserInfo = {
+  name: string;
+  privileges: string[];
+  blocked: boolean;
+  createdAt: number;
+  token?: string;
+};
+
+function toHttpUrl(base: string, pathAndQuery: string): string {
   const url = new URL(base);
   url.protocol = url.protocol === "wss:" || url.protocol === "https:" ? "https:" : "http:";
-  url.pathname = path;
-  url.search = "";
+  const q = pathAndQuery.indexOf("?");
+  url.pathname = q === -1 ? pathAndQuery : pathAndQuery.slice(0, q);
+  url.search = q === -1 ? "" : pathAndQuery.slice(q);
   return url.toString();
 }
 
@@ -205,10 +215,15 @@ function formatAge(ms: number): string {
   return `${Math.floor(m / 60)}h${m % 60}m`;
 }
 
-async function manageFetch(base: string, path: string, secret?: string, method = "GET") {
+async function manageFetch(base: string, path: string, secret?: string, method = "GET", body?: unknown) {
   const headers: Record<string, string> = {};
   if (secret) headers.authorization = `Bearer ${secret}`;
-  const res = await fetch(toHttpUrl(base, path), { method, headers });
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const res = await fetch(toHttpUrl(base, path), {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
   if (!res.ok) {
     console.error(`${res.status} ${res.statusText}: ${await res.text()}`);
     process.exit(1);
@@ -225,6 +240,7 @@ function printBindings(base: string, rows: BindingInfo[]) {
   console.table(
     rows.map((r) => ({
       lobby: r.id,
+      owner: r.owner,
       type: r.http ? "http+ws" : "ws",
       clients: r.clients,
       pendingHttp: r.pendingHttp,
@@ -235,14 +251,65 @@ function printBindings(base: string, rows: BindingInfo[]) {
   );
 }
 
-const USAGE = `Usage:
-  bun run src/bridge.ts tunnel --lobby <name> [--ws <host:port>] [--http <host:port>] [--connect <[host:]port>] [--url <url>] [--pass <pass>] [--secret <token>]
-  bun run src/bridge.ts manage <list|ls|watch|close> [lobby] [--url <url>] [--secret <token>] [--json] [--interval <ms>]`;
+const HELP_TUNNEL = `Usage: bun run src/bridge.ts tunnel --lobby <name> [options]
+
+Options:
+  -l, --lobby <name>        Tunnel lobby name (required)
+      --ws <host:port>      Bridge a local WebSocket server to the tunnel
+      --http <host:port>    Forward HTTP requests from the tunnel to a local server
+      --connect <[h:]port>  Listen locally and bridge WS clients to a remote tunnel host
+  -u, --url <url>           Tunnel server URL (default: wss://tunnel.siemvk.nl)
+  -p, --pass <password>     Lobby password
+  -s, --secret <token>      Host secret (default: $SECRET or ~/.config/svk-tunnels/secret)
+  -h, --help                Show this help
+
+Examples:
+  bun run src/bridge.ts tunnel -l app --http localhost:3000 --ws localhost:3000
+  bun run src/bridge.ts tunnel -l app --connect 8080`;
+
+const HELP_MANAGE = `Usage: bun run src/bridge.ts manage <subcommand> [options]
+
+Subcommands:
+  list, ls                          List active bindings (default)
+  watch                             Live-refresh active bindings
+  close <lobby> [--cooldown <s>]    Force-stop a binding (default cooldown: 60s)
+  users                             List user accounts
+  user add <name> [--priv ws,http] [--token <t>]
+  user block|unblock <name>         Block/unblock user (closes their tunnels)
+  user priv <name> <ws,http,admin>  Update user privileges
+  user rm <name>                    Delete user
+
+Options:
+  -u, --url <url>                   Tunnel server URL (default: wss://tunnel.siemvk.nl)
+  -s, --secret <token>              Admin/host secret (default: $SECRET or ~/.config/svk-tunnels/secret)
+      --priv <list>                 Comma-separated privileges: ws,http,admin
+      --token <token>               Explicit token for user add
+      --cooldown <sec>              Re-host cooldown seconds on close (default: 60)
+      --json                        Output raw JSON (list/ls/users)
+      --interval <ms>               Refresh interval for watch (default: 2000)
+  -h, --help                        Show this help`;
+
+const HELP_MAIN = `Usage: bun run src/bridge.ts <command> [options]
+
+Commands:
+  tunnel                    Host local WS/HTTP services or connect local clients
+  manage                    List, watch, or close active server bindings
+
+Config (~/.config/svk-tunnels/):
+  secret                    Default host/admin secret
+  subdomaineddomains        Domains formatted as <lobby>.<domain>
+  patheddomains             Domains formatted as <domain>/<lobby>
+
+Run "<command> --help" for command options.`;
 
 if (import.meta.main) {
   const [cmd, ...rest] = process.argv.slice(2);
+  if (!cmd || cmd === "-h" || cmd === "--help" || cmd === "help") {
+    console.log(HELP_MAIN);
+    process.exit(0);
+  }
   if (cmd !== "tunnel" && cmd !== "manage") {
-    console.error(USAGE);
+    console.error(`Unknown command: ${cmd}\n\n${HELP_MAIN}`);
     process.exit(1);
   }
 
@@ -250,23 +317,32 @@ if (import.meta.main) {
     args: rest,
     allowPositionals: true,
     options: {
-      url: { type: "string", default: "wss://tunnel.siemvk.nl" },
-      lobby: { type: "string" },
+      help: { type: "boolean", short: "h", default: false },
+      url: { type: "string", short: "u", default: "wss://tunnel.siemvk.nl" },
+      lobby: { type: "string", short: "l" },
       ws: { type: "string" },
       http: { type: "string" },
       connect: { type: "string" },
-      pass: { type: "string" },
-      secret: { type: "string" },
+      pass: { type: "string", short: "p" },
+      secret: { type: "string", short: "s" },
       json: { type: "boolean", default: false },
       interval: { type: "string", default: "2000" },
+      priv: { type: "string" },
+      token: { type: "string" },
+      cooldown: { type: "string" },
     },
   });
+
+  if (values.help) {
+    console.log(cmd === "tunnel" ? HELP_TUNNEL : HELP_MANAGE);
+    process.exit(0);
+  }
 
   const secret = values.secret ?? loadDefaultSecret();
 
   if (cmd === "tunnel") {
     if (!values.lobby || (!values.ws && !values.http && !values.connect)) {
-      console.error(USAGE);
+      console.error(HELP_TUNNEL);
       process.exit(1);
     }
 
@@ -307,13 +383,51 @@ if (import.meta.main) {
     } else if (sub === "close") {
       const target = arg ?? values.lobby;
       if (!target) {
-        console.error("Usage: bun run src/bridge.ts manage close <lobby>");
+        console.error("Usage: bun run src/bridge.ts manage close <lobby> [--cooldown <sec>]");
         process.exit(1);
       }
-      const res = (await manageFetch(values.url, `/_tunnels/${encodeURIComponent(target)}`, secret, "DELETE")) as { closed: string };
-      console.log(`Closed ${res.closed}`);
+      const q = values.cooldown !== undefined ? `?cooldown=${encodeURIComponent(values.cooldown)}` : "";
+      const res = (await manageFetch(values.url, `/_tunnels/${encodeURIComponent(target)}${q}`, secret, "DELETE")) as {
+        closed: string;
+        cooldownSec: number;
+      };
+      console.log(`Closed ${res.closed} (cooldown: ${res.cooldownSec}s)`);
+    } else if (sub === "users") {
+      const rows = (await manageFetch(values.url, "/_users", secret)) as UserInfo[];
+      if (values.json) console.log(JSON.stringify(rows, null, 2));
+      else if (!rows.length) console.log("No users.");
+      else console.table(rows.map((u) => ({ name: u.name, privileges: u.privileges.join(","), blocked: u.blocked })));
+    } else if (sub === "user") {
+      const [, action, name, extra] = positionals;
+      if (!action || !name) {
+        console.error(HELP_MANAGE);
+        process.exit(1);
+      }
+      const enc = encodeURIComponent(name);
+      if (action === "add") {
+        const privileges = (values.priv ?? "ws,http").split(",").map((s) => s.trim()).filter(Boolean);
+        const created = (await manageFetch(values.url, "/_users", secret, "POST", {
+          name,
+          token: values.token,
+          privileges,
+        })) as UserInfo;
+        console.log(JSON.stringify(created, null, 2));
+      } else if (action === "block" || action === "unblock") {
+        const updated = await manageFetch(values.url, `/_users/${enc}`, secret, "PATCH", { blocked: action === "block" });
+        console.log(JSON.stringify(updated));
+      } else if (action === "priv") {
+        const privileges = (extra ?? values.priv ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+        const updated = await manageFetch(values.url, `/_users/${enc}`, secret, "PATCH", { privileges });
+        console.log(JSON.stringify(updated));
+      } else if (action === "rm") {
+        const res = await manageFetch(values.url, `/_users/${enc}`, secret, "DELETE");
+        console.log(JSON.stringify(res));
+      } else {
+        console.error(HELP_MANAGE);
+        process.exit(1);
+      }
     } else {
-      console.error(USAGE);
+      console.error(HELP_MANAGE);
       process.exit(1);
     }
   }

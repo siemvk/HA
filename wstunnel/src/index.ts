@@ -28,10 +28,11 @@ const protectLevel: ProtectLevel =
 const hostToken = process.env.SECRET;
 const defaultCooldownMs = Number(process.env.FORCE_STOP_COOLDOWN_MS ?? 60_000);
 
-type Privilege = "ws" | "http" | "admin";
+type Privilege = "ws" | "http" | "forceview" | "admin";
 type User = {
   name: string;
   token: string;
+  passwordHash?: string;
   privileges: Privilege[];
   blocked: boolean;
   createdAt: number;
@@ -120,6 +121,24 @@ function resolveActor(secret?: string): Actor | "blocked" | null {
   return null;
 }
 
+function resolveBasicUser(basicDecoded?: string): Actor | "blocked" | null {
+  if (!basicDecoded) return null;
+  const colon = basicDecoded.indexOf(":");
+  if (colon === -1) return null;
+  const u = users.get(basicDecoded.slice(0, colon));
+  if (!u?.passwordHash || !Bun.password.verifySync(basicDecoded.slice(colon + 1), u.passwordHash)) return null;
+  return u.blocked ? "blocked" : { name: u.name, privileges: new Set(u.privileges), isRoot: false };
+}
+
+function canForceView(secret?: string, basicDecoded?: string): boolean {
+  for (const actor of [resolveActor(secret), resolveBasicUser(basicDecoded)]) {
+    if (actor && actor !== "blocked" && (actor.isRoot || actor.privileges.has("admin") || actor.privileges.has("forceview"))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function authorizeHost(http: boolean, secret?: string): Actor | null {
   const actor = resolveActor(secret);
   if (actor === "blocked") return null;
@@ -188,17 +207,19 @@ const server = Bun.serve<WSData>({
       ? url.pathname + url.search
       : (slash === -1 ? "/" : url.pathname.slice(slash)) + url.search;
     const queryPass = url.searchParams.get("pass") ?? url.searchParams.get("password") ?? undefined;
-    const cookiePass = req.headers.get("cookie")?.match(/(?:^|;\s*)__tunnel_pass=([^;]+)/)?.[1];
+    const rawCookie = req.headers.get("cookie");
+    const cookiePass = rawCookie?.match(/(?:^|;\s*)__tunnel_pass=([^;]+)/)?.[1];
+    const cookieSecret = rawCookie?.match(/(?:^|;\s*)__tunnel_secret=([^;]+)/)?.[1];
     const authHeader = req.headers.get("authorization");
     const basicRaw = authHeader?.match(/^Basic\s+(.+)/i)?.[1];
     const basicDecoded = basicRaw ? Buffer.from(basicRaw, "base64").toString("utf8") : undefined;
     const basicPass = basicDecoded?.includes(":") ? basicDecoded.slice(basicDecoded.indexOf(":") + 1) : undefined;
     const pass = queryPass ?? (cookiePass ? decodeURIComponent(cookiePass) : undefined) ?? basicPass;
+    const querySecret = url.searchParams.get("secret") ?? url.searchParams.get("token") ?? undefined;
     const secret =
-      url.searchParams.get("secret") ??
-      url.searchParams.get("token") ??
+      querySecret ??
       authHeader?.match(/^Bearer\s+(.+)/i)?.[1] ??
-      undefined;
+      (cookieSecret ? decodeURIComponent(cookieSecret) : undefined);
     const host = url.searchParams.has("host") || url.searchParams.has("httphost");
     const http = url.searchParams.has("http") || url.searchParams.has("httphost");
 
@@ -254,21 +275,23 @@ const server = Bun.serve<WSData>({
       if (!canManage(secret, "admin")) return new Response("Unauthorized", { status: 401 });
       if (url.pathname === "/_users" && req.method === "GET") {
         return Response.json(
-          [...users.values()].map(({ name, privileges, blocked, createdAt }) => ({
+          [...users.values()].map(({ name, privileges, blocked, passwordHash, createdAt }) => ({
             name,
             privileges,
             blocked,
+            hasPassword: Boolean(passwordHash),
             createdAt,
           })),
         );
       }
       if (url.pathname === "/_users" && req.method === "POST") {
-        const body = (await req.json().catch(() => ({}))) as Partial<User>;
+        const body = (await req.json().catch(() => ({}))) as Partial<User> & { password?: string };
         const name = body.name?.trim();
         if (!name) return new Response("Missing name", { status: 400 });
         const user: User = {
           name,
           token: body.token?.trim() || randomBytes(24).toString("hex"),
+          passwordHash: body.password ? Bun.password.hashSync(body.password) : users.get(name)?.passwordHash,
           privileges: Array.isArray(body.privileges) ? body.privileges : ["ws", "http"],
           blocked: Boolean(body.blocked),
           createdAt: users.get(name)?.createdAt ?? Date.now(),
@@ -276,20 +299,34 @@ const server = Bun.serve<WSData>({
         users.set(name, user);
         saveUsers();
         if (user.blocked) closeUserLobbies(name, "User blocked");
-        return Response.json(user, { status: 201 });
+        return Response.json(
+          { name: user.name, token: user.token, privileges: user.privileges, blocked: user.blocked, hasPassword: Boolean(user.passwordHash), createdAt: user.createdAt },
+          { status: 201 },
+        );
       }
       if (url.pathname.startsWith("/_users/")) {
-        const name = decodeURIComponent(url.pathname.slice("/_users/".length));
+        const rest = url.pathname.slice("/_users/".length);
+        const isLogout = rest.endsWith("/logout");
+        const name = decodeURIComponent(isLogout ? rest.slice(0, -"/logout".length) : rest);
         const user = users.get(name);
         if (!user) return new Response("Not Found", { status: 404 });
+        if (isLogout && req.method === "POST") {
+          user.token = randomBytes(24).toString("hex");
+          saveUsers();
+          closeUserLobbies(name, "User logged out");
+          return Response.json({ name: user.name, token: user.token, loggedOut: true });
+        }
         if (req.method === "PATCH") {
-          const body = (await req.json().catch(() => ({}))) as Partial<User>;
+          const body = (await req.json().catch(() => ({}))) as Partial<User> & { password?: string };
           if (Array.isArray(body.privileges)) user.privileges = body.privileges;
           if (typeof body.blocked === "boolean") user.blocked = body.blocked;
           if (typeof body.token === "string" && body.token.trim()) user.token = body.token.trim();
+          if (typeof body.password === "string") {
+            user.passwordHash = body.password ? Bun.password.hashSync(body.password) : undefined;
+          }
           saveUsers();
           if (user.blocked) closeUserLobbies(name, "User blocked");
-          return Response.json({ name: user.name, privileges: user.privileges, blocked: user.blocked, createdAt: user.createdAt });
+          return Response.json({ name: user.name, privileges: user.privileges, blocked: user.blocked, hasPassword: Boolean(user.passwordHash), createdAt: user.createdAt });
         }
         if (req.method === "DELETE") {
           users.delete(name);
@@ -302,8 +339,17 @@ const server = Bun.serve<WSData>({
     }
 
     const lobby = serverConnection[lobbyId];
+    if (url.pathname === "/_logout" || (lobby?.httpSupport && subPath.split("?")[0] === "/_logout")) {
+      const cookiePath = subdomainLobby || !lobby ? "/" : `/${encodeURIComponent(lobbyId)}`;
+      const headers = new Headers({ "www-authenticate": 'Basic realm="Tunnel"' });
+      headers.append("set-cookie", `__tunnel_pass=; Path=${cookiePath}; Max-Age=0; HttpOnly; SameSite=Lax`);
+      headers.append("set-cookie", `__tunnel_secret=; Path=${cookiePath}; Max-Age=0; HttpOnly; SameSite=Lax`);
+      return new Response("Logged out", { status: 401, headers });
+    }
     if (lobby?.httpSupport) {
-      if (lobby.password && (!pass || !safeEqual(pass, lobby.password))) {
+      const hasPass = Boolean(pass && lobby.password && safeEqual(pass, lobby.password));
+      const forceViewed = Boolean(lobby.password && !hasPass && canForceView(secret, basicDecoded));
+      if (lobby.password && !hasPass && !forceViewed) {
         return new Response("Unauthorized", {
           status: 401,
           headers: { "www-authenticate": 'Basic realm="Tunnel"' },
@@ -323,9 +369,10 @@ const server = Bun.serve<WSData>({
           rewritePrefix: subdomainLobby ? null : cookiePath,
           resolve: (res) => {
             clearTimeout(timer);
-            if (queryPass) {
+            if (queryPass || (forceViewed && querySecret)) {
               const headers = new Headers(res.headers);
-              headers.append("set-cookie", `__tunnel_pass=${encodeURIComponent(queryPass)}; Path=${cookiePath}; HttpOnly; SameSite=Lax`);
+              if (queryPass) headers.append("set-cookie", `__tunnel_pass=${encodeURIComponent(queryPass)}; Path=${cookiePath}; HttpOnly; SameSite=Lax`);
+              if (forceViewed && querySecret) headers.append("set-cookie", `__tunnel_secret=${encodeURIComponent(querySecret)}; Path=${cookiePath}; HttpOnly; SameSite=Lax`);
               resolve(new Response(res.body, { status: res.status, headers }));
             } else {
               resolve(res);

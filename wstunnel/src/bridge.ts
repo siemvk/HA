@@ -194,6 +194,7 @@ type UserInfo = {
   name: string;
   privileges: string[];
   blocked: boolean;
+  hasPassword?: boolean;
   createdAt: number;
   token?: string;
 };
@@ -274,16 +275,19 @@ Subcommands:
   watch                             Live-refresh active bindings
   close <lobby> [--cooldown <s>]    Force-stop a binding (default cooldown: 60s)
   users                             List user accounts
-  user add <name> [--priv ws,http] [--token <t>]
+  user add <name> [--priv ws,http] [--token <t>] [--password <pw>]
+  user pass <name> <password>       Set/update user password (for Basic Auth)
   user block|unblock <name>         Block/unblock user (closes their tunnels)
-  user priv <name> <ws,http,admin>  Update user privileges
+  user logout <name>                Rotate user token & close their tunnels
+  user priv <name> <ws,http,forceview,admin>  Update user privileges
   user rm <name>                    Delete user
 
 Options:
   -u, --url <url>                   Tunnel server URL (default: wss://tunnel.siemvk.nl)
   -s, --secret <token>              Admin/host secret (default: $SECRET or ~/.config/svk-tunnels/secret)
-      --priv <list>                 Comma-separated privileges: ws,http,admin
+      --priv <list>                 Comma-separated privileges: ws,http,forceview,admin
       --token <token>               Explicit token for user add
+      --password <pw>               Password for user add/pass
       --cooldown <sec>              Re-host cooldown seconds on close (default: 60)
       --json                        Output raw JSON (list/ls/users)
       --interval <ms>               Refresh interval for watch (default: 2000)
@@ -329,6 +333,7 @@ if (import.meta.main) {
       interval: { type: "string", default: "2000" },
       priv: { type: "string" },
       token: { type: "string" },
+      password: { type: "string" },
       cooldown: { type: "string" },
     },
   });
@@ -396,7 +401,7 @@ if (import.meta.main) {
       const rows = (await manageFetch(values.url, "/_users", secret)) as UserInfo[];
       if (values.json) console.log(JSON.stringify(rows, null, 2));
       else if (!rows.length) console.log("No users.");
-      else console.table(rows.map((u) => ({ name: u.name, privileges: u.privileges.join(","), blocked: u.blocked })));
+      else console.table(rows.map((u) => ({ name: u.name, privileges: u.privileges.join(","), password: Boolean(u.hasPassword), blocked: u.blocked })));
     } else if (sub === "user") {
       const [, action, name, extra] = positionals;
       if (!action || !name) {
@@ -409,9 +414,17 @@ if (import.meta.main) {
         const created = (await manageFetch(values.url, "/_users", secret, "POST", {
           name,
           token: values.token,
+          password: values.password,
           privileges,
         })) as UserInfo;
         console.log(JSON.stringify(created, null, 2));
+      } else if (action === "pass") {
+        const password = extra ?? values.password ?? "";
+        const updated = await manageFetch(values.url, `/_users/${enc}`, secret, "PATCH", { password });
+        console.log(JSON.stringify(updated));
+      } else if (action === "logout") {
+        const res = await manageFetch(values.url, `/_users/${enc}/logout`, secret, "POST");
+        console.log(JSON.stringify(res, null, 2));
       } else if (action === "block" || action === "unblock") {
         const updated = await manageFetch(values.url, `/_users/${enc}`, secret, "PATCH", { blocked: action === "block" });
         console.log(JSON.stringify(updated));
